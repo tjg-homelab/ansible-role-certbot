@@ -1,0 +1,179 @@
+---
+- name: Assert supported OS
+  ansible.builtin.assert:
+    that:
+      - ansible_facts["os_family"] | lower == "debian"
+    fail_msg: "certbot role supports Debian-family systems (Debian, Ubuntu)."
+
+- name: Assert required certificate settings
+  ansible.builtin.assert:
+    that:
+      - certbot_domains | length > 0
+      - certbot_cert_name | length > 0
+      - certbot_challenge in ["dns-cloudflare", "webroot"]
+    fail_msg: >-
+      Set certbot_domains (non-empty) and a valid certbot_challenge
+      (dns-cloudflare | webroot).
+
+# ---------- Install certbot via snap (certbot's recommended method) ----------
+- name: Install snapd
+  become: true
+  ansible.builtin.apt:
+    name: snapd
+    state: present
+    update_cache: true
+  when: certbot_manage_install | bool
+
+- name: Ensure snap core is present
+  become: true
+  ansible.builtin.command: snap install core
+  register: certbot_snap_core
+  changed_when: "'already installed' not in (certbot_snap_core.stdout + certbot_snap_core.stderr)"
+  when: certbot_manage_install | bool
+
+- name: Install the certbot snap
+  become: true
+  ansible.builtin.command:
+    cmd: "snap install {{ certbot_snap_name }} --classic"
+    creates: "{{ certbot_bin }}"
+  when: certbot_manage_install | bool
+
+- name: Allow certbot to trust the root-run DNS plugin
+  become: true
+  ansible.builtin.command: "snap set {{ certbot_snap_name }} trust-plugin-with-root=ok"
+  changed_when: false
+  when:
+    - certbot_manage_install | bool
+    - certbot_challenge == "dns-cloudflare"
+
+- name: Check whether the Cloudflare DNS plugin snap is installed
+  become: true
+  ansible.builtin.command: snap list certbot-dns-cloudflare
+  register: certbot_cf_plugin
+  changed_when: false
+  failed_when: false
+  when:
+    - certbot_manage_install | bool
+    - certbot_challenge == "dns-cloudflare"
+
+- name: Install the Cloudflare DNS plugin snap
+  become: true
+  ansible.builtin.command: snap install certbot-dns-cloudflare
+  changed_when: true
+  when:
+    - certbot_manage_install | bool
+    - certbot_challenge == "dns-cloudflare"
+    - (certbot_cf_plugin.rc | default(1)) != 0
+
+- name: Connect the Cloudflare DNS plugin to certbot
+  become: true
+  ansible.builtin.command: "snap connect {{ certbot_snap_name }}:plugin certbot-dns-cloudflare"
+  changed_when: false
+  when:
+    - certbot_manage_install | bool
+    - certbot_challenge == "dns-cloudflare"
+
+# ---------- Cloudflare DNS credentials (DNS-01 only) ----------
+- name: Ensure DNS credentials directory exists
+  become: true
+  ansible.builtin.file:
+    path: "{{ certbot_dns_credentials_path | dirname }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+  when:
+    - certbot_challenge == "dns-cloudflare"
+    - certbot_dns_credentials_content | length > 0
+
+- name: Install Cloudflare DNS credentials
+  become: true
+  ansible.builtin.copy:
+    dest: "{{ certbot_dns_credentials_path }}"
+    content: "{{ certbot_dns_credentials_content }}\n"
+    owner: root
+    group: root
+    mode: "0600"
+  no_log: true
+  when:
+    - certbot_challenge == "dns-cloudflare"
+    - certbot_dns_credentials_content | length > 0
+
+# ---------- Initial issuance (guarded — no-op once the lineage exists) ----------
+- name: Build the certonly command
+  ansible.builtin.set_fact:
+    certbot_certonly_cmd: >-
+      {{ certbot_bin }} certonly --non-interactive --agree-tos
+      --cert-name {{ certbot_cert_name }}
+      {{ ('--email ' + certbot_email) if (certbot_email | length > 0) else '--register-unsafely-without-email' }}
+      {{
+        ('--dns-cloudflare --dns-cloudflare-credentials ' + certbot_dns_credentials_path +
+         ' --dns-cloudflare-propagation-seconds ' + (certbot_dns_propagation_seconds | string))
+        if certbot_challenge == 'dns-cloudflare'
+        else ('--webroot -w ' + certbot_webroot_path)
+      }}
+      {{ certbot_domains | map('regex_replace', '^(.*)$', '-d \1') | join(' ') }}
+  when: certbot_manage_certificates | bool
+
+- name: Obtain certificate (skips when the lineage already exists)
+  become: true
+  ansible.builtin.command:
+    cmd: "{{ certbot_certonly_cmd }}"
+    creates: "/etc/letsencrypt/live/{{ certbot_cert_name }}/fullchain.pem"
+  when:
+    - certbot_manage_certificates | bool
+    - not ansible_check_mode
+
+# ---------- Auto-renewal timer ----------
+- name: Install the certbot renewal service unit
+  become: true
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/certbot-renew.service
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=Renew Let's Encrypt certificates via certbot
+      After=network-online.target
+      Wants=network-online.target
+
+      [Service]
+      Type=oneshot
+      ExecStart={{ certbot_bin }} renew --quiet{{ (' --deploy-hook ' + certbot_deploy_hook) if (certbot_deploy_hook | length > 0) else '' }}
+  register: certbot_renew_service
+  when: certbot_manage_renew_timer | bool
+
+- name: Install the certbot renewal timer unit
+  become: true
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/certbot-renew.timer
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=Scheduled certbot renewal check
+
+      [Timer]
+      OnCalendar={{ certbot_renew_oncalendar }}
+      RandomizedDelaySec={{ certbot_renew_randomized_delay_sec }}
+      Persistent=true
+
+      [Install]
+      WantedBy=timers.target
+  register: certbot_renew_timer
+  when: certbot_manage_renew_timer | bool
+
+- name: Enable and start the certbot renewal timer
+  become: true
+  ansible.builtin.systemd_service:
+    name: certbot-renew.timer
+    enabled: true
+    state: started
+    daemon_reload: "{{ certbot_renew_service.changed or certbot_renew_timer.changed }}"
+  # In --check the copy tasks don't write the unit files, so systemd can't find
+  # the timer to enable; skip only in check mode (a real run writes them first).
+  when:
+    - certbot_manage_renew_timer | bool
+    - not ansible_check_mode

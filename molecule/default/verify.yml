@@ -1,0 +1,52 @@
+---
+- name: Verify
+  hosts: all
+  become: true
+  tasks:
+    - name: Stat the Cloudflare DNS credentials file
+      ansible.builtin.stat:
+        path: /root/.secrets/certbot/cloudflare.ini
+      register: certbot_creds_stat
+
+    - name: Assert the DNS credentials file exists with 0600
+      ansible.builtin.assert:
+        that:
+          - certbot_creds_stat.stat.exists
+          - certbot_creds_stat.stat.isreg
+          - certbot_creds_stat.stat.mode == "0600"
+
+    - name: Stat the renewal service unit
+      ansible.builtin.stat:
+        path: /etc/systemd/system/certbot-renew.service
+      register: certbot_service_stat
+
+    - name: Stat the renewal timer unit
+      ansible.builtin.stat:
+        path: /etc/systemd/system/certbot-renew.timer
+      register: certbot_timer_stat
+
+    - name: Assert both renewal units exist
+      ansible.builtin.assert:
+        that:
+          - certbot_service_stat.stat.exists
+          - certbot_timer_stat.stat.exists
+
+    - name: Read the renewal service unit
+      ansible.builtin.slurp:
+        src: /etc/systemd/system/certbot-renew.service
+      register: certbot_service_content
+
+    - name: Assert the service runs certbot renew
+      ansible.builtin.assert:
+        that:
+          - "'certbot renew --quiet' in (certbot_service_content.content | b64decode)"
+
+    - name: Stat the renewal timer enablement symlink
+      ansible.builtin.stat:
+        path: /etc/systemd/system/timers.target.wants/certbot-renew.timer
+      register: certbot_timer_wants
+
+    - name: Assert the renewal timer is enabled
+      ansible.builtin.assert:
+        that:
+          - certbot_timer_wants.stat.exists

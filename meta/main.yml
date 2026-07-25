@@ -1,0 +1,28 @@
+---
+galaxy_info:
+  role_name: certbot
+  author: rnissen
+  description: >-
+    Install certbot (via snap) and set a host up to issue and auto-renew its own
+    Let's Encrypt certificate — DNS-01 (Cloudflare, wildcards) or HTTP-01 (webroot)
+    — with a systemd renewal timer. The issuer counterpart to a distribute-only certs role.
+  license: MIT
+  min_ansible_version: "2.14"
+  platforms:
+    - name: Debian
+      versions:
+        - bookworm
+        - trixie
+    - name: Ubuntu
+      versions:
+        - jammy
+        - noble
+  galaxy_tags:
+    - certbot
+    - letsencrypt
+    - tls
+    - ssl
+    - acme
+    - cloudflare
+
+dependencies: []

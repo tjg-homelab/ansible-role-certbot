@@ -1,0 +1,49 @@
+---
+# defaults file for certbot
+#
+# This role installs certbot (via snap — certbot's recommended method) and sets a
+# host up to ISSUE and AUTO-RENEW its own certificate. Pair it with a web server /
+# reverse proxy that terminates TLS. It is the issuer counterpart to a distribute-only
+# certs role: here every TLS host owns its cert end-to-end, so nothing depends on a
+# central host or on Ansible being re-run to keep the cert fresh.
+
+# ---------- Install (snap) ----------
+# Set false to skip the snap install (e.g. Molecule containers, where snapd doesn't
+# run) and only manage credentials, issuance guard, and the renewal timer.
+certbot_manage_install: true
+certbot_snap_name: certbot
+# certbot's snap exposes the binary here; systemd units need the absolute path.
+certbot_bin: /snap/bin/certbot
+
+# ---------- ACME account / certificate ----------
+# Empty email registers the ACME account without one (--register-unsafely-without-email),
+# matching the existing homelab account. Set an address to receive expiry notices.
+certbot_email: ""
+# REQUIRED: the names on the cert. First entry becomes the lineage/live-dir name.
+# e.g. [folden-nissen.com, "*.folden-nissen.com"]
+certbot_domains: []
+certbot_cert_name: "{{ certbot_domains[0] | default('') }}"
+
+# Set false to skip the guarded initial `certbot certonly` (Molecule / hosts that
+# already hold the cert and only need install + renew wiring).
+certbot_manage_certificates: true
+
+# ---------- Challenge ----------
+# dns-cloudflare : DNS-01 via the certbot-dns-cloudflare snap plugin (wildcards).
+# webroot        : HTTP-01 served from certbot_webroot_path (public edge; no DNS token).
+certbot_challenge: dns-cloudflare
+
+# DNS-01 (Cloudflare) — creds file body is plugin-agnostic; vault the token.
+certbot_dns_credentials_path: /root/.secrets/certbot/cloudflare.ini
+certbot_dns_credentials_content: ""
+certbot_dns_propagation_seconds: 30
+
+# HTTP-01 (webroot) — path the web server serves at /.well-known/acme-challenge/.
+certbot_webroot_path: /var/www/html
+
+# ---------- Renewal timer ----------
+certbot_manage_renew_timer: true
+certbot_renew_oncalendar: "*-*-* 03,15:00:00"
+certbot_renew_randomized_delay_sec: 3600
+# Optional command run after a successful renewal (e.g. "systemctl reload nginx").
+certbot_deploy_hook: ""
