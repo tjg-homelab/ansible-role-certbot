@@ -11,6 +11,17 @@
 # Set false to skip the snap install (e.g. Molecule containers, where snapd doesn't
 # run) and only manage credentials, issuance guard, and the renewal timer.
 certbot_manage_install: true
+
+# How to install certbot: "snap" (upstream, always current) or "apt" (distro).
+#
+# snap CANNOT work everywhere. A container-based VPS — OpenVZ, LXC — shares the
+# host kernel and cannot mount squashfs, so snapd fails with "system does not
+# fully support snapd: cannot mount squashfs image" and no amount of retrying
+# helps. Use apt there; it is a real install under Ansible's control, not a
+# concession.
+#
+# Set certbot_bin to match: /snap/bin/certbot or /usr/bin/certbot.
+certbot_install_method: snap
 certbot_snap_name: certbot
 # certbot's snap exposes the binary here; systemd units need the absolute path.
 certbot_bin: /snap/bin/certbot

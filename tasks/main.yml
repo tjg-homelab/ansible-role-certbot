@@ -16,27 +16,54 @@
       (dns-cloudflare | webroot).
 
 # ---------- Install certbot via snap (certbot's recommended method) ----------
+- name: Assert a supported install method
+  ansible.builtin.assert:
+    that:
+      - certbot_install_method in ["snap", "apt"]
+    fail_msg: "certbot_install_method must be 'snap' or 'apt', got '{{ certbot_install_method }}'"
+    quiet: true
+  when: certbot_manage_install | bool
+
+# ---------- apt install path ----------
+# For hosts where snap cannot run at all (container-based VPS: no squashfs).
+- name: Install certbot from apt
+  become: true
+  ansible.builtin.apt:
+    name: "{{ ['certbot'] + (['python3-certbot-dns-cloudflare'] if certbot_challenge == 'dns-cloudflare' else []) }}"
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+  when:
+    - certbot_manage_install | bool
+    - certbot_install_method == "apt"
+
 - name: Install snapd
   become: true
   ansible.builtin.apt:
     name: snapd
     state: present
     update_cache: true
-  when: certbot_manage_install | bool
+  when:
+    - certbot_manage_install | bool
+    - certbot_install_method == "snap"
 
 - name: Ensure snap core is present
   become: true
   ansible.builtin.command: snap install core
   register: certbot_snap_core
   changed_when: "'already installed' not in (certbot_snap_core.stdout + certbot_snap_core.stderr)"
-  when: certbot_manage_install | bool
+  when:
+    - certbot_manage_install | bool
+    - certbot_install_method == "snap"
 
 - name: Install the certbot snap
   become: true
   ansible.builtin.command:
     cmd: "snap install {{ certbot_snap_name }} --classic"
     creates: "{{ certbot_bin }}"
-  when: certbot_manage_install | bool
+  when:
+    - certbot_manage_install | bool
+    - certbot_install_method == "snap"
 
 - name: Allow certbot to trust the root-run DNS plugin
   become: true
@@ -44,6 +71,7 @@
   changed_when: false
   when:
     - certbot_manage_install | bool
+    - certbot_install_method == "snap"
     - certbot_challenge == "dns-cloudflare"
 
 - name: Check whether the Cloudflare DNS plugin snap is installed
@@ -54,6 +82,7 @@
   failed_when: false
   when:
     - certbot_manage_install | bool
+    - certbot_install_method == "snap"
     - certbot_challenge == "dns-cloudflare"
 
 - name: Install the Cloudflare DNS plugin snap
@@ -62,6 +91,7 @@
   changed_when: true
   when:
     - certbot_manage_install | bool
+    - certbot_install_method == "snap"
     - certbot_challenge == "dns-cloudflare"
     - (certbot_cf_plugin.rc | default(1)) != 0
 
@@ -71,6 +101,7 @@
   changed_when: false
   when:
     - certbot_manage_install | bool
+    - certbot_install_method == "snap"
     - certbot_challenge == "dns-cloudflare"
 
 # ---------- Cloudflare DNS credentials (DNS-01 only) ----------
