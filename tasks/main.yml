@@ -209,6 +209,25 @@
   register: certbot_existing_cert
   when: certbot_manage_certificates | bool
 
+# certbot REFUSES to issue into a live/ directory it did not create:
+#   "live directory exists for <name>"
+# The bootstrap placeholder occupies exactly that path, so it has to be cleared
+# the moment real issuance is about to happen. Its whole job — letting the web
+# server start so HTTP-01 can validate — is finished by this point.
+#
+# Removing it while nginx is running is safe: nginx holds the loaded certificate
+# in memory and keeps serving until it is reloaded, which the deploy hook does
+# after a successful issuance.
+- name: Remove the bootstrap placeholder before real issuance
+  become: true
+  ansible.builtin.file:
+    path: "/etc/letsencrypt/live/{{ certbot_cert_name }}"
+    state: absent
+  when:
+    - certbot_manage_certificates | bool
+    - not ansible_check_mode
+    - certbot_bootstrap_flag.stat.exists | default(false)
+
 - name: Obtain certificate (skips once a real one exists)
   become: true
   ansible.builtin.command:
