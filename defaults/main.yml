@@ -28,6 +28,21 @@ certbot_cert_name: "{{ certbot_domains[0] | default('') }}"
 # already hold the cert and only need install + renew wiring).
 certbot_manage_certificates: true
 
+# Drop a SELF-SIGNED placeholder at the lineage path when no certificate exists
+# yet, so a web server whose vhosts reference that path can start.
+#
+# This breaks a deadlock that only appears on a BARE host: with an HTTP-01
+# challenge, certbot needs a web server answering on :80 to validate, but the
+# web server will not start without the certificate it is being asked to serve.
+# The placeholder lets nginx come up, certbot then validates THROUGH it, and the
+# deploy hook reloads onto the real certificate.
+#
+# The placeholder is marked (see certbot_bootstrap_marker) so issuance still
+# runs against it — a self-signed file must never be mistaken for a real cert
+# and silently served for 90 days.
+certbot_bootstrap_selfsigned: false
+certbot_bootstrap_marker: .ansible-selfsigned-bootstrap
+
 # ---------- Challenge ----------
 # dns-cloudflare : DNS-01 via the certbot-dns-cloudflare snap plugin (wildcards).
 # webroot        : HTTP-01 served from certbot_webroot_path (public edge; no DNS token).
