@@ -99,7 +99,56 @@
     - certbot_challenge == "dns-cloudflare"
     - certbot_dns_credentials_content | length > 0
 
-# ---------- Initial issuance (guarded — no-op once the lineage exists) ----------
+
+# ---------- Self-signed bootstrap (breaks the bare-host deadlock) ----------
+- name: Bootstrap a self-signed placeholder certificate
+  when:
+    - certbot_bootstrap_selfsigned | bool
+    - not ansible_check_mode
+  block:
+    - name: Check whether the lineage already exists
+      ansible.builtin.stat:
+        path: "/etc/letsencrypt/live/{{ certbot_cert_name }}/fullchain.pem"
+      register: certbot_lineage
+
+    - name: Create the lineage directory
+      ansible.builtin.file:
+        path: "/etc/letsencrypt/live/{{ certbot_cert_name }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+      when: not certbot_lineage.stat.exists
+
+    - name: Generate the placeholder private key
+      community.crypto.openssl_privatekey:
+        path: "/etc/letsencrypt/live/{{ certbot_cert_name }}/privkey.pem"
+        size: 2048
+        mode: "0600"
+      when: not certbot_lineage.stat.exists
+
+    - name: Generate the placeholder certificate
+      community.crypto.x509_certificate:
+        path: "/etc/letsencrypt/live/{{ certbot_cert_name }}/fullchain.pem"
+        privatekey_path: "/etc/letsencrypt/live/{{ certbot_cert_name }}/privkey.pem"
+        provider: selfsigned
+        selfsigned_not_after: "+30d"
+        mode: "0644"
+      when: not certbot_lineage.stat.exists
+
+    - name: Mark the lineage as a placeholder
+      # Without this the guard below would treat the self-signed file as a real
+      # certificate and never issue — the site would serve an untrusted cert
+      # indefinitely, which is worse than failing loudly.
+      ansible.builtin.file:
+        path: "/etc/letsencrypt/live/{{ certbot_cert_name }}/{{ certbot_bootstrap_marker }}"
+        state: touch
+        owner: root
+        group: root
+        mode: "0644"
+      when: not certbot_lineage.stat.exists
+
+# ---------- Initial issuance (guarded — no-op once a REAL cert exists) ----------
 - name: Build the certonly command
   ansible.builtin.set_fact:
     certbot_certonly_cmd: >-
@@ -115,14 +164,41 @@
       {{ certbot_domains | map('regex_replace', '^(.*)$', '-d \1') | join(' ') }}
   when: certbot_manage_certificates | bool
 
-- name: Obtain certificate (skips when the lineage already exists)
+- name: Check for a real certificate
+  # `creates:` alone is not enough once a self-signed placeholder can occupy the
+  # path: the guard has to distinguish a real lineage from a bootstrap one.
+  ansible.builtin.stat:
+    path: "/etc/letsencrypt/live/{{ certbot_cert_name }}/{{ certbot_bootstrap_marker }}"
+  register: certbot_bootstrap_flag
+  when: certbot_manage_certificates | bool
+
+- name: Check whether any certificate is present
+  ansible.builtin.stat:
+    path: "/etc/letsencrypt/live/{{ certbot_cert_name }}/fullchain.pem"
+  register: certbot_existing_cert
+  when: certbot_manage_certificates | bool
+
+- name: Obtain certificate (skips once a real one exists)
   become: true
   ansible.builtin.command:
     cmd: "{{ certbot_certonly_cmd }}"
-    creates: "/etc/letsencrypt/live/{{ certbot_cert_name }}/fullchain.pem"
+  register: certbot_issued
+  changed_when: certbot_issued.rc == 0
   when:
     - certbot_manage_certificates | bool
     - not ansible_check_mode
+    - (not certbot_existing_cert.stat.exists) or (certbot_bootstrap_flag.stat.exists | default(false))
+
+- name: Clear the placeholder marker after a real issuance
+  ansible.builtin.file:
+    path: "/etc/letsencrypt/live/{{ certbot_cert_name }}/{{ certbot_bootstrap_marker }}"
+    state: absent
+  when:
+    - certbot_manage_certificates | bool
+    - not ansible_check_mode
+    - certbot_issued is defined
+    - certbot_issued is not skipped
+    - certbot_issued.rc | default(1) == 0
 
 # ---------- Auto-renewal timer ----------
 - name: Install the certbot renewal service unit

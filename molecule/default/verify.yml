@@ -50,3 +50,52 @@
       ansible.builtin.assert:
         that:
           - certbot_timer_wants.stat.exists
+
+    # --- AN-43: self-signed bootstrap breaks the bare-host deadlock ---
+    # On a bare host, HTTP-01 needs a web server on :80, but the web server will
+    # not start without the cert it is asked to serve. The placeholder lets it
+    # start; the marker guarantees a real issuance still happens afterwards.
+    - name: Stat the bootstrap placeholder material
+      ansible.builtin.stat:
+        path: "/etc/letsencrypt/live/molecule-bootstrap/{{ item }}"
+      register: certbot_verify_bootstrap
+      loop:
+        - fullchain.pem
+        - privkey.pem
+        - .ansible-selfsigned-bootstrap
+
+    - name: Assert the placeholder and its marker exist
+      ansible.builtin.assert:
+        that:
+          - item.stat.exists
+        fail_msg: "missing {{ item.item }} — nginx would not be able to start"
+        quiet: true
+      loop: "{{ certbot_verify_bootstrap.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    - name: Read the placeholder certificate
+      community.crypto.x509_certificate_info:
+        path: /etc/letsencrypt/live/molecule-bootstrap/fullchain.pem
+      register: certbot_verify_placeholder
+
+    - name: Assert it really is self-signed, and short-lived
+      # Self-signed means issuer == subject. Short expiry is deliberate: if a
+      # placeholder ever escapes to production it should fail loudly and soon,
+      # not quietly serve an untrusted cert for 90 days.
+      ansible.builtin.assert:
+        that:
+          - certbot_verify_placeholder.issuer == certbot_verify_placeholder.subject
+        quiet: true
+
+    - name: Assert the private key is not world-readable
+      ansible.builtin.stat:
+        path: /etc/letsencrypt/live/molecule-bootstrap/privkey.pem
+      register: certbot_verify_key
+
+    - name: Check key permissions
+      ansible.builtin.assert:
+        that:
+          - certbot_verify_key.stat.mode == '0600'
+        fail_msg: "placeholder key is {{ certbot_verify_key.stat.mode }}, expected 0600"
+        quiet: true
