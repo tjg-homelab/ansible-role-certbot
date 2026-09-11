@@ -41,6 +41,15 @@
         that:
           - "'certbot renew --quiet' in (certbot_service_content.content | b64decode)"
 
+    - name: Assert the deploy hook is wired into the renewal ExecStart
+      # Real end-to-end coverage (does the hook actually fire on a fresh
+      # issuance?) needs real certonly issuance, which this scenario
+      # deliberately skips (no Let's Encrypt in CI). This at least locks in
+      # that the variable reaches the unit file correctly.
+      ansible.builtin.assert:
+        that:
+          - "'--deploy-hook touch /tmp/certbot-deploy-hook-configured' in (certbot_service_content.content | b64decode)"
+
     - name: Stat the renewal timer enablement symlink
       ansible.builtin.stat:
         path: /etc/systemd/system/timers.target.wants/certbot-renew.timer

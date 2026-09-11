@@ -193,6 +193,7 @@
         else ('--webroot -w ' + certbot_webroot_path)
       }}
       {{ certbot_domains | map('regex_replace', '^(.*)$', '-d \1') | join(' ') }}
+      {{ (' --deploy-hook ' + certbot_deploy_hook) if (certbot_deploy_hook | length > 0) else '' }}
   when: certbot_manage_certificates | bool
 
 - name: Check for a real certificate
@@ -216,8 +217,20 @@
 # server start so HTTP-01 can validate — is finished by this point.
 #
 # Removing it while nginx is running is safe: nginx holds the loaded certificate
-# in memory and keeps serving until it is reloaded, which the deploy hook does
-# after a successful issuance.
+# in memory and keeps serving until it is reloaded, which `--deploy-hook` on the
+# certonly command above does immediately after a successful issuance.
+#
+# BUG FIXED HERE: `--deploy-hook` was previously wired ONLY into the renewal
+# timer's `certbot renew --deploy-hook ...` (below) — this comment claimed the
+# reload already happened here, but nothing actually told the *first* real
+# issuance to run it. certbot itself honors --deploy-hook on `certonly` too
+# (runs it once, immediately, for that invocation, same as on a renewal), so
+# adding it to the certonly command above is sufficient — no separate Ansible
+# task needed. Until this fix, every brand-new HTTP-01 lineage served a stale
+# cert (bootstrap placeholder, or nothing) until the *next* scheduled renewal
+# run happened to fire, hours or days later. Caught in production: AN-91's
+# wiki.paxroleplay.com vhost issued a real cert successfully, but nginx kept
+# serving the self-signed placeholder until manually reloaded.
 - name: Remove the bootstrap placeholder before real issuance
   become: true
   ansible.builtin.file:

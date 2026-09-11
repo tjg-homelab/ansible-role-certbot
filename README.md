@@ -20,7 +20,10 @@ never leave the host.
 - Optionally writes a Cloudflare DNS credentials file (DNS-01)
 - Performs a **guarded initial issuance** (`certbot certonly`) — skipped when the
   certificate lineage already exists, so it's safe to re-run and safe on hosts that
-  already hold the cert
+  already hold the cert. Runs `certbot_deploy_hook` immediately after a successful
+  issuance (same as a renewal does), so a web server serving a bootstrap
+  placeholder — or nothing — picks up the real cert right away instead of waiting
+  for the next scheduled renewal
 - Installs a `certbot-renew.service` + `.timer` (twice-daily, randomized, persistent)
   and enables it
 
