@@ -50,6 +50,12 @@ provisioner:
           - "*.example.com"
         certbot_challenge: dns-cloudflare
         certbot_dns_credentials_content: "dns_cloudflare_api_token = molecule-dummy-token"
+        # Not exercised end-to-end here (that needs real certonly issuance,
+        # which is off in this scenario — see the note above). Set anyway so
+        # verify.yml can assert it's correctly wired into the renewal timer's
+        # ExecStart, which IS real, host-visible behaviour this scenario can
+        # check without touching Let's Encrypt.
+        certbot_deploy_hook: "touch /tmp/certbot-deploy-hook-configured"
         # AN-43: exercise the self-signed bootstrap. Real issuance stays off
         # (no Let's Encrypt from CI), which is exactly the state a bare host is
         # in before its web server exists — so this is the honest test of the
