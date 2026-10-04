@@ -312,6 +312,8 @@
     - certbot_issued.rc | default(1) == 0
 
 # ---------- Auto-renewal timer ----------
+# No --deploy-hook on the ExecStart below: the renewal-hooks/deploy/ script
+# above runs on every renewal already, so passing it again would reload twice.
 - name: Install the certbot renewal service unit
   become: true
   ansible.builtin.copy:
@@ -327,8 +329,6 @@
 
       [Service]
       Type=oneshot
-      # No --deploy-hook here: the renewal-hooks/deploy/ script above runs on
-      # every renewal already, so passing it again would reload twice.
       ExecStart={{ certbot_bin }} renew --quiet
   register: certbot_renew_service
   when: certbot_manage_renew_timer | bool
