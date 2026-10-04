@@ -24,6 +24,10 @@ never leave the host.
   issuance (same as a renewal does), so a web server serving a bootstrap
   placeholder — or nothing — picks up the real cert right away instead of waiting
   for the next scheduled renewal
+- Installs `certbot_deploy_hook` as a certbot **directory hook**
+  (`/etc/letsencrypt/renewal-hooks/deploy/`), so it runs after every renewal no
+  matter which timer did it — this role's, or the one the snap/apt package
+  ships (`snap.certbot.renew.timer` / `certbot.timer`), which is left alone
 - Installs a `certbot-renew.service` + `.timer` (twice-daily, randomized, persistent)
   and enables it
 
@@ -54,7 +58,8 @@ It does **not** configure your web server. Point nginx/apache at the cert in
 | `certbot_manage_install` | `true` | Install certbot via snap (set false in containers) |
 | `certbot_manage_certificates` | `true` | Run the guarded initial issuance |
 | `certbot_renew_oncalendar` | `*-*-* 03,15:00:00` | Renewal timer schedule |
-| `certbot_deploy_hook` | `""` | Optional post-renew command (e.g. `systemctl reload nginx`) |
+| `certbot_deploy_hook` | `""` | Optional post-issue/renew shell command (e.g. `systemctl reload nginx`), installed as a directory hook |
+| `certbot_deploy_hook_path` | `/etc/letsencrypt/renewal-hooks/deploy/ansible-deploy-hook.sh` | Where that hook script is written |
 
 See `defaults/main.yml` for the full set.
 

@@ -41,14 +41,41 @@
         that:
           - "'certbot renew --quiet' in (certbot_service_content.content | b64decode)"
 
-    - name: Assert the deploy hook is wired into the renewal ExecStart
-      # Real end-to-end coverage (does the hook actually fire on a fresh
-      # issuance?) needs real certonly issuance, which this scenario
-      # deliberately skips (no Let's Encrypt in CI). This at least locks in
-      # that the variable reaches the unit file correctly.
+    - name: Assert the renewal ExecStart does not pass the hook again
+      # The directory hook below covers every renewal; a --deploy-hook here
+      # as well would run it twice.
       ansible.builtin.assert:
         that:
-          - "'--deploy-hook touch /tmp/certbot-deploy-hook-configured' in (certbot_service_content.content | b64decode)"
+          - "'--deploy-hook' not in (certbot_service_content.content | b64decode)"
+
+    - name: Stat the directory deploy hook
+      ansible.builtin.stat:
+        path: /etc/letsencrypt/renewal-hooks/deploy/ansible-deploy-hook.sh
+      register: certbot_hook_stat
+
+    - name: Assert the directory deploy hook is installed and executable
+      ansible.builtin.assert:
+        that:
+          - certbot_hook_stat.stat.exists
+          - certbot_hook_stat.stat.executable
+
+    # Real end-to-end coverage (does certbot call it on a renewal?) needs real
+    # issuance, which this scenario skips (no Let's Encrypt in CI). Running the
+    # installed script directly proves its body is the configured command and
+    # that the outer quotes molecule.yml deliberately uses were stripped.
+    - name: Run the directory deploy hook
+      ansible.builtin.command: /etc/letsencrypt/renewal-hooks/deploy/ansible-deploy-hook.sh
+      changed_when: false
+
+    - name: Stat the hook's marker file
+      ansible.builtin.stat:
+        path: /tmp/certbot-deploy-hook-configured
+      register: certbot_hook_marker
+
+    - name: Assert the hook ran the configured command
+      ansible.builtin.assert:
+        that:
+          - certbot_hook_marker.stat.exists
 
     - name: Stat the renewal timer enablement symlink
       ansible.builtin.stat:

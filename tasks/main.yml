@@ -180,6 +180,54 @@
       when: not certbot_lineage.stat.exists
 
 # ---------- Initial issuance (guarded — no-op once a REAL cert exists) ----------
+# certbot_deploy_hook is one shell command. Older configs wrapped it in single
+# quotes so it survived as ONE argument through systemd's ExecStart and the
+# certonly command line; strip one such layer so both spellings work, and quote
+# it ourselves where it becomes an argument.
+- name: Normalise the deploy hook command
+  ansible.builtin.set_fact:
+    certbot_deploy_hook_cmd: >-
+      {{ certbot_deploy_hook | trim | regex_replace("^'(.*)'$", '\1')
+         | regex_replace('^"(.*)"$', '\1') }}
+
+# ---------- Deploy hook (directory) ----------
+# certbot runs every executable in renewal-hooks/deploy/ after EACH successful
+# renewal, whoever invoked `certbot renew`: this role's certbot-renew.timer, or
+# the timer the package ships (snap.certbot.renew.timer / apt's certbot.timer),
+# which runs a bare `certbot renew` and knows nothing about our --deploy-hook.
+# Before this, whichever timer fired first won: if the packaged one renewed,
+# the cert changed on disk but nginx was never reloaded, and ours then found
+# nothing due. The directory makes the reload unconditional, so the packaged
+# timer is left alone (masking it would fight snapd, which rewrites its units
+# on every refresh).
+- name: Ensure the certbot deploy-hook directory exists
+  ansible.builtin.file:
+    path: /etc/letsencrypt/renewal-hooks/deploy
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  when: certbot_deploy_hook_cmd | length > 0
+
+- name: Install the deploy hook
+  ansible.builtin.copy:
+    dest: "{{ certbot_deploy_hook_path }}"
+    owner: root
+    group: root
+    mode: "0755"
+    content: |
+      #!/bin/sh
+      # Managed by Ansible (certbot role, certbot_deploy_hook).
+      # Runs after every successful renewal of any lineage on this host.
+      {{ certbot_deploy_hook_cmd }}
+  when: certbot_deploy_hook_cmd | length > 0
+
+- name: Remove the deploy hook when unset
+  ansible.builtin.file:
+    path: "{{ certbot_deploy_hook_path }}"
+    state: absent
+  when: certbot_deploy_hook_cmd | length == 0
+
 - name: Build the certonly command
   ansible.builtin.set_fact:
     certbot_certonly_cmd: >-
@@ -193,7 +241,7 @@
         else ('--webroot -w ' + certbot_webroot_path)
       }}
       {{ certbot_domains | map('regex_replace', '^(.*)$', '-d \1') | join(' ') }}
-      {{ (' --deploy-hook ' + certbot_deploy_hook) if (certbot_deploy_hook | length > 0) else '' }}
+      {{ (' --deploy-hook ' + (certbot_deploy_hook_cmd | quote)) if (certbot_deploy_hook_cmd | length > 0) else '' }}
   when: certbot_manage_certificates | bool
 
 - name: Check for a real certificate
@@ -279,7 +327,9 @@
 
       [Service]
       Type=oneshot
-      ExecStart={{ certbot_bin }} renew --quiet{{ (' --deploy-hook ' + certbot_deploy_hook) if (certbot_deploy_hook | length > 0) else '' }}
+      # No --deploy-hook here: the renewal-hooks/deploy/ script above runs on
+      # every renewal already, so passing it again would reload twice.
+      ExecStart={{ certbot_bin }} renew --quiet
   register: certbot_renew_service
   when: certbot_manage_renew_timer | bool
 

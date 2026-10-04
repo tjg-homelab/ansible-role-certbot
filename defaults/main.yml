@@ -71,5 +71,9 @@ certbot_webroot_path: /var/www/html
 certbot_manage_renew_timer: true
 certbot_renew_oncalendar: "*-*-* 03,15:00:00"
 certbot_renew_randomized_delay_sec: 3600
-# Optional command run after a successful renewal (e.g. "systemctl reload nginx").
+# Optional shell command run after every successful issuance or renewal
+# (e.g. "systemctl reload nginx"). Installed as a certbot directory hook, so it
+# also fires when the PACKAGED renewal timer (snap/apt) is the one that renews.
+# Plain command; surrounding single quotes from older configs are tolerated.
 certbot_deploy_hook: ""
+certbot_deploy_hook_path: /etc/letsencrypt/renewal-hooks/deploy/ansible-deploy-hook.sh
